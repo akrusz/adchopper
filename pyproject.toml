@@ -1,0 +1,25 @@
+[project]
+name = "adchopper"
+version = "0.1.0"
+description = "Remove ads from podcast MP3s using local transcription + LLM ad detection + ffmpeg"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "faster-whisper>=1.0.0",
+    "requests>=2.28.0",
+]
+
+[project.optional-dependencies]
+# Cloud transcription/classification backends are optional.
+openai = ["openai>=1.0.0"]
+anthropic = ["anthropic>=0.40.0"]
+
+[project.scripts]
+adchopper = "adchopper.cli:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["adchopper*"]
