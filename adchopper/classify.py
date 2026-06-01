@@ -14,11 +14,10 @@ from __future__ import annotations
 
 import json
 import re
-from typing import List
-
-import requests
+from typing import List, Optional
 
 from .segments import Segment, AdSpan, fmt_ts, merge_spans
+from .backends import get_backend, DEFAULT_MODELS
 
 
 SYSTEM_PROMPT = """\
@@ -123,49 +122,30 @@ def _spans_from_response(
     return spans
 
 
-def _call_ollama(
-    system: str, user: str, model: str, host: str, timeout: float
-) -> str:
-    url = host.rstrip("/") + "/api/chat"
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        "stream": False,
-        "format": "json",
-        "options": {"temperature": 0},
-    }
-    try:
-        resp = requests.post(url, json=payload, timeout=timeout)
-    except requests.exceptions.ConnectionError as e:
-        raise SystemExit(
-            f"Could not reach Ollama at {host}. Is it running? "
-            f"(start it with `ollama serve` and `ollama pull {model}`)"
-        ) from e
-    if resp.status_code == 404:
-        raise SystemExit(
-            f"Ollama model '{model}' not found. Pull it with: ollama pull {model}"
-        )
-    resp.raise_for_status()
-    return resp.json()["message"]["content"]
-
-
 def classify_ads(
     segments: List[Segment],
-    model: str = "llama3.1:8b",
+    backend: str = "ollama",
+    model: Optional[str] = None,
     host: str = "http://localhost:11434",
     window: int = 220,
     overlap: int = 20,
     timeout: float = 300.0,
     verbose: bool = True,
 ) -> List[AdSpan]:
-    """Detect ad spans in the transcript using a local Ollama model."""
+    """Detect ad spans in the transcript using the selected LLM backend.
+
+    `backend` is one of ``ollama`` / ``anthropic`` / ``openai``. `model`
+    defaults to a sensible per-backend choice when not given.
+    """
+    model = model or DEFAULT_MODELS.get(backend)
+    call = get_backend(backend, model, host, timeout)
+
     by_index = {s.index: s for s in segments}
     all_spans: List[AdSpan] = []
 
     windows = list(_windows(segments, window, overlap))
+    if verbose:
+        print(f"[classify] backend={backend} model={model}")
     for wi, win in enumerate(windows):
         if verbose:
             print(
@@ -176,7 +156,7 @@ def classify_ads(
             "Here is the transcript window. Identify the advertisement line "
             "ranges.\n\n" + _format_window(win)
         )
-        content = _call_ollama(SYSTEM_PROMPT, user, model, host, timeout)
+        content = call(SYSTEM_PROMPT, user)
         data = _extract_json(content)
         spans = _spans_from_response(data, by_index)
         if verbose and spans:

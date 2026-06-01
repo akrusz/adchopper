@@ -21,7 +21,9 @@ from . import __version__
 from .segments import AdSpan, fmt_ts
 from .transcribe import transcribe, audio_duration
 from .classify import classify_ads
+from .backends import DEFAULT_MODELS
 from .cut import cut_ads, probe_duration
+from .report import write_markdown
 
 
 def _default_paths(audio_path: str):
@@ -29,6 +31,7 @@ def _default_paths(audio_path: str):
     return {
         "transcript": base + ".transcript.json",
         "report": base + ".ads.json",
+        "md_report": base + ".report.md",
         "output": base + ".noads.mp3",
     }
 
@@ -119,9 +122,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     g2 = p.add_argument_group("ad detection (LLM)")
     g2.add_argument(
+        "--backend",
+        choices=["ollama", "anthropic", "openai"],
+        default="ollama",
+        help="Which LLM to detect ads with. Default: ollama (fully local). "
+        "anthropic/openai are more accurate but send the transcript to the "
+        "cloud and need an API key.",
+    )
+    g2.add_argument(
         "--llm-model",
-        default="llama3.1:8b",
-        help="Ollama model name. Default: llama3.1:8b.",
+        default=None,
+        help="Model name. Defaults per backend: ollama=llama3.1:8b, "
+        "anthropic=claude-opus-4-8, openai=gpt-4o-mini.",
     )
     g2.add_argument(
         "--ollama-host",
@@ -173,6 +185,7 @@ def main(argv: List[str] | None = None) -> int:
     paths = _default_paths(args.audio)
     transcript_path = args.transcript or paths["transcript"]
     report_path = paths["report"]
+    md_report_path = paths["md_report"]
     output_path = args.output or paths["output"]
 
     # 1. Ad spans: either loaded from a report, or detected fresh.
@@ -210,6 +223,7 @@ def main(argv: List[str] | None = None) -> int:
         duration = probe_duration(args.audio) or audio_duration(segments)
         ad_spans = classify_ads(
             segments,
+            backend=args.backend,
             model=args.llm_model,
             host=args.ollama_host,
             window=args.window,
@@ -218,13 +232,24 @@ def main(argv: List[str] | None = None) -> int:
         )
         with open(report_path, "w", encoding="utf-8") as f:
             json.dump([s.to_dict() for s in ad_spans], f, indent=2)
+        write_markdown(
+            md_report_path,
+            audio_path=args.audio,
+            ad_spans=ad_spans,
+            duration=duration,
+            segments=segments,
+            backend=args.backend,
+            model=args.llm_model or DEFAULT_MODELS.get(args.backend),
+        )
         if verbose:
             print(f"[report] ad spans written -> {report_path}")
+            print(f"[report] audit report (verify the cuts) -> {md_report_path}")
 
     _print_report(ad_spans, duration, segments)
 
     if args.review_only:
         print("\nReview-only mode: no audio was cut.")
+        print(f"Read {md_report_path} to verify the detected ads.")
         print(f"Edit {report_path} if needed, then run with --ads-from to cut.")
         return 0
 

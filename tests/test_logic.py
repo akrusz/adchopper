@@ -176,3 +176,62 @@ def test_text_in_span_truncates():
 
 def test_text_in_span_no_segments():
     assert _text_in_span(AdSpan(0, 10), None) == ""
+
+
+# --- backends & report ---
+
+from adchopper.backends import DEFAULT_MODELS, get_backend, ADS_JSON_SCHEMA
+from adchopper.report import build_markdown
+
+
+def test_default_models_present():
+    assert set(DEFAULT_MODELS) == {"ollama", "anthropic", "openai"}
+    assert DEFAULT_MODELS["anthropic"].startswith("claude")
+
+
+def test_ads_schema_is_strict():
+    # strict structured-output schemas must forbid extra properties
+    assert ADS_JSON_SCHEMA["additionalProperties"] is False
+    item = ADS_JSON_SCHEMA["properties"]["ads"]["items"]
+    assert item["additionalProperties"] is False
+    assert set(item["required"]) == {"start_line", "end_line", "reason"}
+
+
+def test_get_backend_unknown_raises():
+    import pytest
+
+    with pytest.raises(SystemExit):
+        get_backend("nope", "m", "http://x", 1.0)
+
+
+def test_get_backend_ollama_constructs_without_network():
+    # Ollama backend construction must not make any network call.
+    b = get_backend("ollama", "llama3.1:8b", "http://localhost:11434", 5.0)
+    assert b.model == "llama3.1:8b"
+
+
+def test_report_lists_each_span_with_transcript():
+    segs = [
+        Segment(0, 0.0, 5.0, "welcome to the show"),
+        Segment(1, 5.0, 10.0, "this episode is sponsored by Acme"),
+        Segment(2, 10.0, 15.0, "use code POD20"),
+        Segment(3, 15.0, 20.0, "now back to our guest"),
+    ]
+    spans = [AdSpan(5.0, 15.0, "promo code")]
+    md = build_markdown(
+        "ep.mp3", spans, duration=20.0, segments=segs,
+        backend="anthropic", model="claude-opus-4-8",
+    )
+    assert "ep.mp3" in md
+    assert "promo code" in md
+    assert "sponsored by Acme" in md
+    assert "POD20" in md
+    # content that was kept must not appear as "removed"
+    assert "welcome to the show" not in md
+    assert "claude-opus-4-8" in md
+    assert "50.0%" in md  # 10s of 20s removed
+
+
+def test_report_handles_no_ads():
+    md = build_markdown("ep.mp3", [], duration=100.0, segments=[])
+    assert "No ads detected" in md
