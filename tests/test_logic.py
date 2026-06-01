@@ -1,7 +1,8 @@
 """Tests for the pure logic that doesn't need ffmpeg/whisper/ollama."""
 
-from adchopper.segments import AdSpan, Segment, merge_spans, keep_ranges, fmt_ts
+from adchopper.segments import AdSpan, Segment, Word, merge_spans, keep_ranges, fmt_ts
 from adchopper.classify import _extract_json, _spans_from_response, _windows
+from adchopper.cli import _text_in_span
 
 
 def test_fmt_ts():
@@ -110,3 +111,68 @@ def test_windows_no_chunking_when_window_zero():
     segs = [Segment(i, 0, 0, "") for i in range(5)]
     wins = list(_windows(segs, window=0, overlap=0))
     assert len(wins) == 1 and len(wins[0]) == 5
+
+
+def test_word_boundaries_default_to_segment_times():
+    seg = Segment(0, 1.0, 9.0, "hi")
+    assert seg.word_start == 1.0 and seg.word_end == 9.0
+
+
+def test_word_boundaries_trim_silence_padding():
+    # Segment spans 1.0-9.0 but speech is only 1.4-8.2 (VAD padding around it).
+    seg = Segment(
+        0,
+        1.0,
+        9.0,
+        "buy now",
+        words=[Word("buy", 1.4, 1.8), Word("now", 7.9, 8.2)],
+    )
+    assert seg.word_start == 1.4 and seg.word_end == 8.2
+
+
+def test_spans_use_word_boundaries_when_available():
+    segs = [
+        Segment(0, 0.0, 5.0, "hi"),
+        Segment(1, 5.0, 10.0, "sponsor", words=[Word("sponsor", 5.3, 9.6)]),
+    ]
+    by_index = {s.index: s for s in segs}
+    data = {"ads": [{"start_line": 1, "end_line": 1}]}
+    spans = _spans_from_response(data, by_index)
+    assert spans[0].start == 5.3 and spans[0].end == 9.6
+
+
+def test_segment_word_roundtrip():
+    seg = Segment(2, 5.0, 10.0, "use code FOO", words=[Word("use", 5.0, 5.4)])
+    restored = Segment.from_dict(seg.to_dict())
+    assert restored.words[0].word == "use"
+    assert restored.words[0].start == 5.0
+    assert restored.word_end == 5.4
+
+
+def test_segment_roundtrip_without_words():
+    seg = Segment(0, 0.0, 1.0, "hi")
+    restored = Segment.from_dict(seg.to_dict())
+    assert restored.words is None
+
+
+def test_text_in_span_collects_overlapping_text():
+    segs = [
+        Segment(0, 0.0, 5.0, "intro"),
+        Segment(1, 5.0, 10.0, "this episode is sponsored by"),
+        Segment(2, 10.0, 15.0, "use code FOO"),
+        Segment(3, 15.0, 20.0, "back to the show"),
+    ]
+    span = AdSpan(5.0, 15.0)
+    text = _text_in_span(span, segs)
+    assert "sponsored" in text and "FOO" in text
+    assert "intro" not in text and "back to the show" not in text
+
+
+def test_text_in_span_truncates():
+    segs = [Segment(0, 0.0, 5.0, "x" * 500)]
+    text = _text_in_span(AdSpan(0.0, 5.0), segs, max_chars=50)
+    assert len(text) <= 50 and text.endswith("…")
+
+
+def test_text_in_span_no_segments():
+    assert _text_in_span(AdSpan(0, 10), None) == ""

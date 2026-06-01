@@ -2,25 +2,57 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
-from typing import List
+from dataclasses import dataclass, asdict, field
+from typing import List, Optional
+
+
+@dataclass
+class Word:
+    """A single word with its own start/end timestamps."""
+
+    word: str
+    start: float  # seconds
+    end: float  # seconds
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Word":
+        return cls(word=d["word"], start=d["start"], end=d["end"])
 
 
 @dataclass
 class Segment:
-    """A timestamped chunk of transcript."""
+    """A timestamped chunk of transcript, optionally with per-word timing."""
 
     index: int
     start: float  # seconds
     end: float  # seconds
     text: str
+    words: Optional[List[Word]] = None
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, d: dict) -> "Segment":
-        return cls(index=d["index"], start=d["start"], end=d["end"], text=d["text"])
+        raw_words = d.get("words")
+        words = [Word.from_dict(w) for w in raw_words] if raw_words else None
+        return cls(
+            index=d["index"],
+            start=d["start"],
+            end=d["end"],
+            text=d["text"],
+            words=words,
+        )
+
+    @property
+    def word_start(self) -> float:
+        """Start of the first spoken word (trims leading silence), else start."""
+        return self.words[0].start if self.words else self.start
+
+    @property
+    def word_end(self) -> float:
+        """End of the last spoken word (trims trailing silence), else end."""
+        return self.words[-1].end if self.words else self.end
 
 
 @dataclass

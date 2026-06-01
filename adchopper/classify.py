@@ -110,10 +110,13 @@ def _spans_from_response(
         end_seg = by_index.get(end_line)
         if start_seg is None or end_seg is None:
             continue
+        # Use word-level boundaries when available so the cut starts at the
+        # first spoken word of the ad and ends at its last spoken word,
+        # trimming the silence padding that segment timestamps include.
         spans.append(
             AdSpan(
-                start=start_seg.start,
-                end=end_seg.end,
+                start=start_seg.word_start,
+                end=end_seg.word_end,
                 reason=str(ad.get("reason", "")).strip(),
             )
         )

@@ -10,7 +10,17 @@ Remove ads from podcast MP3s, fully locally:
 3. **Cut** those spans out of the MP3 with `ffmpeg`.
 
 The LLM returns *segment line ranges*, not raw timestamps, so cut points stay
-grounded in the actual transcript instead of hallucinated times.
+grounded in the actual transcript instead of hallucinated times. Whisper's
+**word-level timestamps** are then used to snap each cut to the first/last
+*spoken word* of the ad, trimming the silence padding that segment timestamps
+include.
+
+One run does the whole job for one MP3 — transcribe, detect, preview, cut:
+
+```bash
+adchopper episode.mp3 -o clean.mp3     # shows the cuts, asks once, then cuts
+adchopper episode.mp3 -o clean.mp3 -y  # trust it: no prompt, just cut
+```
 
 ## Why this design
 
@@ -18,8 +28,11 @@ grounded in the actual transcript instead of hallucinated times.
   `faster-whisper` runs on CPU and needs no separate server.
 - **Conservative by default.** Cutting real content is worse than leaving an ad
   in, so the prompt errs toward *not* flagging, and the default flow is
-  **review-then-cut**: you see the detected spans (and can hand-edit them)
-  before any audio is touched.
+  **preview-then-cut**: it prints each detected span *with the transcript text
+  that will be removed* and asks once before touching audio. Trust it with
+  `-y` to skip the prompt; hand-edit with `--ads-from` when you don't.
+- **Word-accurate cuts.** Per-word timestamps tighten each boundary to the
+  spoken word, so cuts land cleanly instead of clipping speech or leaving gaps.
 - **Cached transcript.** Transcription is the slow step; the transcript is
   saved to JSON so re-running detection/cutting is fast.
 
@@ -61,6 +74,7 @@ adchopper episode.mp3 --ads-from episode.ads.json -o episode.clean.mp3 -y
 |------|---------|---------|
 | `--whisper-model` | tiny/base/small/medium/large-v3 (bigger = better + slower) | `base` |
 | `--device` / `--compute-type` | e.g. `cuda` / `int8` for speed | `auto` / `default` |
+| `--no-word-timestamps` | coarser segment-level cuts (slightly faster) | word timing on |
 | `--llm-model` | Ollama model name | `llama3.1:8b` |
 | `--ollama-host` | Ollama base URL (or `OLLAMA_HOST` env) | `http://localhost:11434` |
 | `--window` / `--overlap` | transcript lines per LLM call / overlap | `220` / `20` |
@@ -87,10 +101,11 @@ the first few episodes of a new show to calibrate. Transcription quality
 ## Limitations / ideas
 
 - Dynamically inserted ads that change between downloads will differ per file.
-- Boundaries are segment-accurate (typically within a second or two), not
-  sample-accurate; the small fade hides the seams.
+- Boundaries snap to word timestamps (typically within ~0.1–0.3s), not
+  sample-accurate; the small fade hides the seams. Pass `--no-word-timestamps`
+  for coarser segment-level boundaries.
 - Possible extensions: an OpenAI/Anthropic classifier backend (scaffolded in
-  `pyproject.toml` extras), word-level timestamps for tighter cuts, and an
+  `pyproject.toml` extras) for higher-accuracy detection, and an
   audio-fingerprint pass to catch repeated jingles.
 
 ## Development

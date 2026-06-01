@@ -33,7 +33,18 @@ def _default_paths(audio_path: str):
     }
 
 
-def _print_report(ad_spans: List[AdSpan], duration: float) -> None:
+def _text_in_span(span: AdSpan, segments, max_chars: int = 220) -> str:
+    """Concatenated transcript text overlapping the span, for previewing."""
+    if not segments:
+        return ""
+    parts = [s.text for s in segments if s.end > span.start and s.start < span.end]
+    text = " ".join(parts).strip()
+    if len(text) > max_chars:
+        text = text[: max_chars - 1].rstrip() + "…"
+    return text
+
+
+def _print_report(ad_spans: List[AdSpan], duration: float, segments=None) -> None:
     print("\n=== Detected ad spans ===")
     if not ad_spans:
         print("  (none)")
@@ -41,12 +52,18 @@ def _print_report(ad_spans: List[AdSpan], duration: float) -> None:
     total = 0.0
     for i, sp in enumerate(ad_spans, 1):
         total += sp.duration
-        print(
+        header = (
             f"  {i:2d}. {fmt_ts(sp.start)} - {fmt_ts(sp.end)} "
-            f"({sp.duration:.0f}s)  {sp.reason}"
+            f"({sp.duration:.0f}s)"
         )
+        if sp.reason:
+            header += f"  [{sp.reason}]"
+        print(header)
+        excerpt = _text_in_span(sp, segments)
+        if excerpt:
+            print(f'        "{excerpt}"')
     pct = (total / duration * 100) if duration else 0
-    print(f"  -> {total:.0f}s of {duration:.0f}s flagged ({pct:.1f}%)")
+    print(f"  -> {total:.0f}s of {duration:.0f}s flagged for removal ({pct:.1f}%)")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -91,6 +108,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--retranscribe",
         action="store_true",
         help="Ignore any cached transcript and transcribe again.",
+    )
+    g.add_argument(
+        "--no-word-timestamps",
+        dest="word_timestamps",
+        action="store_false",
+        help="Disable per-word timestamps (slightly faster, coarser cut "
+        "boundaries that may include a little silence padding).",
     )
 
     g2 = p.add_argument_group("ad detection (LLM)")
@@ -152,11 +176,19 @@ def main(argv: List[str] | None = None) -> int:
     output_path = args.output or paths["output"]
 
     # 1. Ad spans: either loaded from a report, or detected fresh.
+    segments = None
     if args.ads_from:
         with open(args.ads_from, "r", encoding="utf-8") as f:
             ad_data = json.load(f)
         ad_spans = [AdSpan(**d) for d in ad_data]
-        duration = probe_duration(args.audio) or 0.0
+        # Load the cached transcript (if any) so the preview can show text.
+        if os.path.exists(transcript_path):
+            from .transcribe import load_segments
+
+            segments = load_segments(transcript_path)
+        duration = probe_duration(args.audio) or (
+            audio_duration(segments) if segments else 0.0
+        )
     else:
         cache = None if args.retranscribe else transcript_path
         segments = transcribe(
@@ -166,6 +198,7 @@ def main(argv: List[str] | None = None) -> int:
             compute_type=args.compute_type,
             language=args.language,
             cache_path=transcript_path if not args.retranscribe else cache,
+            word_timestamps=args.word_timestamps,
             verbose=verbose,
         )
         # Always (re)write the cache after a fresh transcription.
@@ -188,7 +221,7 @@ def main(argv: List[str] | None = None) -> int:
         if verbose:
             print(f"[report] ad spans written -> {report_path}")
 
-    _print_report(ad_spans, duration)
+    _print_report(ad_spans, duration, segments)
 
     if args.review_only:
         print("\nReview-only mode: no audio was cut.")

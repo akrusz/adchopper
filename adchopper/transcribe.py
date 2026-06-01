@@ -10,7 +10,7 @@ import json
 import os
 from typing import List, Optional
 
-from .segments import Segment
+from .segments import Segment, Word
 
 
 def transcribe(
@@ -20,6 +20,7 @@ def transcribe(
     compute_type: str = "default",
     language: Optional[str] = None,
     cache_path: Optional[str] = None,
+    word_timestamps: bool = True,
     verbose: bool = True,
 ) -> List[Segment]:
     """Transcribe `audio_path` into timestamped segments.
@@ -52,16 +53,26 @@ def transcribe(
         audio_path,
         language=language,
         vad_filter=True,  # skip long silences, improves timestamps
+        word_timestamps=word_timestamps,
     )
 
     segments: List[Segment] = []
     for i, seg in enumerate(raw_segments):
+        words = None
+        if word_timestamps and getattr(seg, "words", None):
+            words = [
+                Word(word=w.word, start=float(w.start), end=float(w.end))
+                for w in seg.words
+                # word timings are occasionally None for filler tokens
+                if w.start is not None and w.end is not None
+            ]
         segments.append(
             Segment(
                 index=i,
                 start=float(seg.start),
                 end=float(seg.end),
                 text=seg.text.strip(),
+                words=words or None,
             )
         )
         if verbose and i % 25 == 0:
